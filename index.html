@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="dark" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TradingView — Chart & AI Analytics</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('tv_theme');
+          if (t === 'light' || t === 'dark') {
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.classList.toggle('dark', t === 'dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#0b0e14] text-[#d1d4dc] antialiased overflow-hidden select-none">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

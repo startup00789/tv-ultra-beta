@@ -5,3 +5,4 @@ dist-server/
 playwright-report/
 test-results/
 .env
+tests/e2e/judge-screenshots/

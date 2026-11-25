@@ -8,6 +8,8 @@ An independent, open-source charting and AI analytics terminal with a production
 
 ![AAPL 1m with Strategy Tester](docs/preview.jpg)
 
+![GBPUSD 1h with SMC zones and AI Copilot](docs/screenshot-smc.jpg)
+
 ---
 
 ## Why this exists

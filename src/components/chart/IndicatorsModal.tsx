@@ -9,6 +9,8 @@ const CATEGORIES: readonly IndCategory[] = ['All', 'Overlays', 'Oscillators', 'V
 
 export function IndicatorsModal() {
   const addIndicator = useWorkspaceStore((s) => s.addIndicator);
+  const indicators = useWorkspaceStore((s) => s.indicators);
+  const removeIndicator = useWorkspaceStore((s) => s.removeIndicator);
   const setIndicatorsModalOpen = useWorkspaceStore((s) => s.setIndicatorsModalOpen);
 
   const [query, setQuery] = useState('');
@@ -64,6 +66,55 @@ export function IndicatorsModal() {
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Active indicators with one-click removal */}
+        <div className="px-4 py-3 border-b border-[var(--tv-border)] bg-[var(--tv-bg-panel)]/50">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--tv-text-muted)]">
+              Active on chart ({indicators.length})
+            </span>
+            {indicators.length > 0 && (
+              <button
+                type="button"
+                data-testid="indicator-remove-all"
+                onClick={() => indicators.forEach((ind) => removeIndicator(ind.instanceId))}
+                className="text-[10.5px] font-semibold text-[#f23645] hover:underline cursor-pointer"
+              >
+                Remove all
+              </button>
+            )}
+          </div>
+          {indicators.length === 0 ? (
+            <div className="text-[11.5px] text-[var(--tv-text-muted)]">
+              No indicators added yet.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5 max-h-[92px] overflow-y-auto pr-1">
+              {indicators.map((ind) => (
+                <span
+                  key={ind.instanceId}
+                  data-testid={`indicator-active-${ind.instanceId}`}
+                  className="inline-flex items-center gap-1.5 h-[26px] pl-2 pr-1 rounded-[5px] border border-[var(--tv-border)] bg-[var(--tv-bg-elevated)] text-[11px] text-[var(--tv-text-primary)]"
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: ind.color ?? '#2962ff' }}
+                  />
+                  <span className="max-w-[150px] truncate">{ind.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${ind.name}`}
+                    data-testid={`indicator-remove-${ind.instanceId}`}
+                    onClick={() => removeIndicator(ind.instanceId)}
+                    className="w-5 h-5 rounded flex items-center justify-center text-[var(--tv-text-muted)] hover:bg-[#f23645]/15 hover:text-[#f23645] cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="px-4 py-2.5 border-b border-[var(--tv-border)] flex items-center gap-2 bg-[var(--tv-bg-panel)]">

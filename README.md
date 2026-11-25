@@ -6,6 +6,8 @@ An independent, open-source charting and AI analytics terminal with a production
 
 ![Beta preview](docs/preview.jpg)
 
+![GBPUSD 1h with SMC zones and live candles](docs/screenshot-smc.jpg)
+
 ---
 
 ## Why this exists
@@ -32,11 +34,14 @@ This beta rebuilds that layer as a real engine. The reverse-engineering breakdow
 - 16 px transparent hit corridors on thin lines and outlines so shapes are actually grabbable.
 - Independent border color/style/width, fill controls, text formatting, templates and pre-draw defaults.
 - Anchor and box handles, magnet snapping, undo/redo, visibility filters.
+- Indicators modal shows active indicators with per-indicator and remove-all controls.
+- Auto-scale button clears the price-to-bar lock so the price axis never stays frozen.
 
 ### Platform
 
 - Persistence: versioned, validated, debounced `localStorage` envelope with migration.
 - Error boundary around the drawing overlay: one broken drawing cannot kill the chart.
+- TradingView-speed candle formation: new bars snap in instantly, live ticks settle in ~90 ms with quintic ease-out.
 - Live market data, watchlists, indicators, overlays, AI panel, strategy tester and paper trading shell.
 
 ## Quick start

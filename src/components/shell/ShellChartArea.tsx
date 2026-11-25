@@ -5,6 +5,7 @@ import {
   type DateRangePreset,
   type ScaleMode,
 } from '../../state/workspaceStore';
+import { useChartAppearanceStore } from '../../state/chartAppearanceStore';
 import type { WorkspaceSlots } from './slots';
 
 const DATE_RANGE_PRESETS: readonly DateRangePreset[] = [
@@ -58,6 +59,20 @@ export function ShellChartArea({ slots }: ShellChartAreaProps) {
   const setGoToDateTimestamp = useWorkspaceStore((s) => s.setGoToDateTimestamp);
   const loadingMoreHistory = useWorkspaceStore((s) => s.loadingMoreHistory);
   const loadDeepHistory = useWorkspaceStore((s) => s.loadDeepHistory);
+
+  const handleAutoScaleClick = () => {
+    // "Lock price to bar ratio" forces the price scale into manual mode. If the
+    // user re-enables Auto, clear that lock too, otherwise the axis looks frozen.
+    if (
+      !autoScale &&
+      useChartAppearanceStore.getState().lockPriceToBarRatio
+    ) {
+      useChartAppearanceStore.getState().updateAppearance({
+        lockPriceToBarRatio: false,
+      });
+    }
+    toggleAutoScale();
+  };
 
   const [clockText, setClockText] = useState(() => formatUtcClock(new Date()));
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -475,7 +490,12 @@ export function ShellChartArea({ slots }: ShellChartAreaProps) {
               type="button"
               aria-label="Auto scale"
               aria-pressed={autoScale}
-              onClick={toggleAutoScale}
+              onClick={handleAutoScaleClick}
+              title={
+                autoScale
+                  ? 'Auto scale is on — click to lock the price axis'
+                  : 'Resume automatic price scaling (clears price-to-bar lock)'
+              }
               className={`h-[24px] px-1.5 rounded-[4px] text-[12px] font-medium transition-colors cursor-pointer ${
                 autoScale
                   ? 'bg-[var(--tv-bg-hover)] text-[var(--tv-accent)] font-semibold'

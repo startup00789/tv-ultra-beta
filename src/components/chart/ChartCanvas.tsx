@@ -86,7 +86,9 @@ interface CandleVisualConfig {
   wickDownColor: string;
 }
 
-const CANDLE_SMOOTH_MS = 220;
+// TradingView-style live updates: a new candle snaps in immediately, and
+// intra-bar ticks settle in ~90 ms instead of the old sluggish 220 ms.
+const CANDLE_SMOOTH_MS = 90;
 
 function toLwcLineStyle(style: LineDashStyle): LineStyle {
   if (style === 'solid') return LineStyle.Solid;
@@ -781,6 +783,18 @@ export function ChartCanvas() {
     watermarkColor,
   ]);
 
+  // Keep the right price scale genuinely automatic. In lightweight-charts a
+  // scale that was manually dragged (or left over from a symbol switch) can
+  // keep its stale range even after `autoScale` is re-enabled. Re-applying the
+  // option on data/symbol changes unfreezes it without fighting the user while
+  // Auto is off.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady) return;
+    if (!autoScale || lockPriceToBarRatio) return;
+    chart.priceScale('right').applyOptions({ autoScale: true });
+  }, [autoScale, bars.length, chartReady, lockPriceToBarRatio, seriesRevision, symbol, timeframe]);
+
   // 3. Rebuild main series whenever chartStyle changes, apply live candle/price-line options, and push OHLCV bars
   useEffect(() => {
     const chart = chartRef.current;
@@ -999,9 +1013,9 @@ export function ChartCanvas() {
               latest.volume === prevAnim.targetBar.volume;
 
             if (!unchanged) {
-              const startClose = isNewBar ? latest.open : prevAnim.displayClose;
-              const startHigh = isNewBar ? latest.open : prevAnim.displayHigh;
-              const startLow = isNewBar ? latest.open : prevAnim.displayLow;
+              const startClose = isNewBar ? latest.close : prevAnim.displayClose;
+              const startHigh = isNewBar ? latest.high : prevAnim.displayHigh;
+              const startLow = isNewBar ? latest.low : prevAnim.displayLow;
               const priceMoved =
                 startClose !== latest.close ||
                 startHigh !== latest.high ||
@@ -1082,7 +1096,9 @@ export function ChartCanvas() {
                     return;
                   }
 
-                  const ease = 1 - (1 - t) ** 3;
+                  // Quintic ease-out: most of the move happens in the first
+                  // few frames (snappy like TradingView), then settles softly.
+                  const ease = 1 - (1 - t) ** 5;
                   const curClose =
                     nextState.fromClose + (target.close - nextState.fromClose) * ease;
                   const rawHigh =

@@ -8,7 +8,7 @@
 
 ![AAPL 1m with AI Strategy Tester](docs/preview.jpg)
 
-![GBPUSD 1h with SMC zones, AI Market Scan and Copilot](docs/screenshot-smc.jpg)
+![GBPUSD 1h with SMC zones, AI Market Scan and Copilot](docs/screenshot-smc.png)
 
 ---
 

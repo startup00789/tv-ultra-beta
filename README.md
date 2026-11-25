@@ -1,12 +1,12 @@
 # TradingView is over.
 
+> **Why pay for TradingView when you have a more advanced free alternative?**
+
 > **PUBLIC BETA** — This is the beta build. The **full-fledged version drops when this repo hits 10K stars**. Star it, watch it, and you will get the complete release first.
 
 An independent, open-source charting and AI analytics terminal with a production-grade drawing engine. Built from the ground up to make the Long/Short Position tools behave the way traders actually expect: precise brackets, real position sizing, TradingView-style stats, and drawings that survive a refresh.
 
-![Beta preview](docs/preview.jpg)
-
-![GBPUSD 1h with SMC zones and live candles](docs/screenshot-smc.jpg)
+![AAPL 1m with Strategy Tester](docs/preview.jpg)
 
 ---
 

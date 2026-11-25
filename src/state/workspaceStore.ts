@@ -38,6 +38,7 @@ import type {
   Timeframe,
 } from '../../shared/types';
 import { apiClient } from '../lib/apiClient';
+import { isPositionTool, syncPositionDrawing } from '../lib/drawingPosition';
 
 export type {
   AIMessage,
@@ -137,6 +138,10 @@ export const DEFAULT_WATCHLIST_TICKERS: readonly string[] = [
 
 const STORAGE_DRAWING_TEMPLATES_KEY = 'tv_ultra_drawing_templates_v1';
 const STORAGE_DRAWING_DEFAULTS_KEY = 'tv_ultra_drawing_defaults_v1';
+const STORAGE_DRAWINGS_KEY = 'tv_ultra_drawings_v1';
+const DRAWINGS_SCHEMA_VERSION = 1;
+const DRAWINGS_PERSIST_DELAY_MS = 250;
+const MAX_PERSISTED_DRAWINGS = 2_000;
 
 export const BUILTIN_DRAWING_TEMPLATES: readonly DrawingStyleTemplate[] = [
   {
@@ -256,6 +261,60 @@ function readInitialDefaultToolStyles(): Record<string, Partial<DrawingStyleTemp
     // Ignore malformed local storage
   }
   return {};
+}
+
+function isValidStoredDrawing(value: unknown): value is DrawingObject {
+  if (!value || typeof value !== 'object') return false;
+  const d = value as Partial<DrawingObject>;
+  const tool = d.tool as string | undefined;
+  return (
+    typeof d.id === 'string' &&
+    d.id.length > 0 &&
+    typeof tool === 'string' &&
+    tool !== 'crosshair' &&
+    tool !== 'ai-range' &&
+    typeof d.symbol === 'string' &&
+    typeof d.timeframe === 'string' &&
+    Array.isArray(d.points) &&
+    d.points.length > 0 &&
+    d.points.every(
+      (p) =>
+        p &&
+        typeof p.time === 'number' &&
+        Number.isFinite(p.time) &&
+        typeof p.price === 'number' &&
+        Number.isFinite(p.price),
+    ) &&
+    typeof d.color === 'string'
+  );
+}
+
+/**
+ * Restore drawings from localStorage and migrate legacy two-anchor position
+ * drawings into the three-anchor model. Corrupt entries are dropped instead of
+ * breaking the chart.
+ */
+function readInitialDrawings(): DrawingObject[] {
+  const raw = safeGetStorage(STORAGE_DRAWINGS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { drawings?: unknown }).drawings)
+        ? (parsed as { drawings: unknown[] }).drawings
+        : null;
+    if (!list) return [];
+    return list
+      .filter(isValidStoredDrawing)
+      .slice(-MAX_PERSISTED_DRAWINGS)
+      .map((drawing) =>
+        isPositionTool(drawing.tool) ? syncPositionDrawing(drawing) : drawing,
+      );
+  } catch {
+    // Ignore malformed local storage
+  }
+  return [];
 }
 
 function safeGetStorage(key: string): string | null {
@@ -601,7 +660,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   // Indicators & Drawings
   indicators: [],
-  drawings: [],
+  drawings: readInitialDrawings(),
   selectedDrawingId: null,
   drawingSettingsId: null,
   drawingTemplates: readInitialDrawingTemplates(),
@@ -1284,12 +1343,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         pitchforkStyle: defaults.pitchforkStyle ?? drawing.pitchforkStyle,
         riskAmountUsd: defaults.riskAmountUsd ?? drawing.riskAmountUsd,
         visibleTimeframes: defaults.visibleTimeframes ?? drawing.visibleTimeframes,
+        accountSize: defaults.accountSize ?? drawing.accountSize,
+        lotSize: defaults.lotSize ?? drawing.lotSize,
+        riskMode: defaults.riskMode ?? drawing.riskMode,
+        riskValue: defaults.riskValue ?? drawing.riskValue,
+        leverage: defaults.leverage ?? drawing.leverage,
+        pointValue: defaults.pointValue ?? drawing.pointValue,
+        qtyPrecision: defaults.qtyPrecision ?? drawing.qtyPrecision,
+        stopColor: defaults.stopColor ?? drawing.stopColor,
+        targetColor: defaults.targetColor ?? drawing.targetColor,
+        compactStats: defaults.compactStats ?? drawing.compactStats,
+        alwaysShowStats: defaults.alwaysShowStats ?? drawing.alwaysShowStats,
+        tickSize: defaults.tickSize ?? drawing.tickSize,
       };
+      const stored = isPositionTool(merged.tool)
+        ? syncPositionDrawing(merged)
+        : merged;
       return {
         undoStack: pushUndoSnapshot(s.undoStack, s.drawings),
         redoStack: [],
-        drawings: [...s.drawings, merged],
-        selectedDrawingId: merged.id,
+        drawings: [...s.drawings, stored],
+        selectedDrawingId: stored.id,
         activeTool: s.keepDrawing ? s.activeTool : 'crosshair',
       };
     });
@@ -1303,16 +1377,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             undoStack: pushUndoSnapshot(s.undoStack, s.drawings),
             redoStack: [],
           }),
-      drawings: s.drawings.map((d) =>
-        d.id === id
-          ? options?.replace
-            ? ({
+      drawings: s.drawings.map((d) => {
+        if (d.id !== id) return d;
+        const next = (
+          options?.replace
+            ? {
                 ...patch,
                 points: (patch.points ?? d.points).map((p) => ({ ...p })),
-              } as DrawingObject)
+              }
             : { ...d, ...patch }
-          : d,
-      ),
+        ) as DrawingObject;
+        if (!isPositionTool(next.tool)) return next;
+
+        // Three-anchor contract: points = [entry, target, stop]. Whenever the
+        // caller moves points (body drag, handle drag, coordinates tab), the
+        // bracket metadata must follow instead of going stale.
+        const points = next.points ?? d.points;
+        const withPoints =
+          patch.points !== undefined
+            ? {
+                ...next,
+                targetPrice: points[1]?.price ?? next.targetPrice,
+                stopPrice: points[2]?.price ?? next.stopPrice,
+              }
+            : next;
+        return syncPositionDrawing(withPoints);
+      }),
     }));
   },
 
@@ -1361,6 +1451,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       visibleTimeframes: fromDrawing.visibleTimeframes
         ? [...fromDrawing.visibleTimeframes]
         : undefined,
+      accountSize: fromDrawing.accountSize,
+      lotSize: fromDrawing.lotSize,
+      riskMode: fromDrawing.riskMode,
+      riskValue: fromDrawing.riskValue,
+      leverage: fromDrawing.leverage,
+      pointValue: fromDrawing.pointValue,
+      qtyPrecision: fromDrawing.qtyPrecision,
+      stopColor: fromDrawing.stopColor,
+      targetColor: fromDrawing.targetColor,
+      compactStats: fromDrawing.compactStats,
+      alwaysShowStats: fromDrawing.alwaysShowStats,
+      tickSize: fromDrawing.tickSize,
     };
     set((s) => {
       const next = [...s.drawingTemplates, tpl];
@@ -1410,6 +1512,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       ...(tpl.pitchforkStyle ? { pitchforkStyle: tpl.pitchforkStyle } : {}),
       ...(tpl.riskAmountUsd ? { riskAmountUsd: tpl.riskAmountUsd } : {}),
       ...(tpl.visibleTimeframes ? { visibleTimeframes: [...tpl.visibleTimeframes] } : {}),
+      ...(tpl.accountSize !== undefined ? { accountSize: tpl.accountSize } : {}),
+      ...(tpl.lotSize !== undefined ? { lotSize: tpl.lotSize } : {}),
+      ...(tpl.riskMode ? { riskMode: tpl.riskMode } : {}),
+      ...(tpl.riskValue !== undefined ? { riskValue: tpl.riskValue } : {}),
+      ...(tpl.leverage !== undefined ? { leverage: tpl.leverage } : {}),
+      ...(tpl.pointValue !== undefined ? { pointValue: tpl.pointValue } : {}),
+      ...(tpl.qtyPrecision !== undefined ? { qtyPrecision: tpl.qtyPrecision } : {}),
+      ...(tpl.stopColor ? { stopColor: tpl.stopColor } : {}),
+      ...(tpl.targetColor ? { targetColor: tpl.targetColor } : {}),
+      ...(tpl.compactStats !== undefined ? { compactStats: tpl.compactStats } : {}),
+      ...(tpl.alwaysShowStats !== undefined
+        ? { alwaysShowStats: tpl.alwaysShowStats }
+        : {}),
+      ...(tpl.tickSize !== undefined ? { tickSize: tpl.tickSize } : {}),
     });
   },
 
@@ -1984,3 +2100,50 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 }));
+
+// ---------------------------------------------------------------------------
+// Drawing persistence
+//
+// Drawings previously lived only in memory, so every refresh wiped the user's
+// analysis. Persist a small versioned envelope (not raw state) and debounce
+// writes so high-frequency drag updates stay cheap.
+// ---------------------------------------------------------------------------
+let drawingsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function writeDrawingsNow(): void {
+  try {
+    safeSetStorage(
+      STORAGE_DRAWINGS_KEY,
+      JSON.stringify({
+        version: DRAWINGS_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        drawings: useWorkspaceStore.getState().drawings.slice(-MAX_PERSISTED_DRAWINGS),
+      }),
+    );
+  } catch {
+    // Ignore quota / serialization failures; the chart keeps working.
+  }
+}
+
+function flushDrawingsPersist(): void {
+  if (drawingsPersistTimer !== null) {
+    clearTimeout(drawingsPersistTimer);
+    drawingsPersistTimer = null;
+  }
+  writeDrawingsNow();
+}
+
+if (typeof globalThis.localStorage !== 'undefined') {
+  useWorkspaceStore.subscribe((state, previous) => {
+    if (state.drawings === previous.drawings) return;
+    if (drawingsPersistTimer !== null) clearTimeout(drawingsPersistTimer);
+    drawingsPersistTimer = setTimeout(() => {
+      drawingsPersistTimer = null;
+      writeDrawingsNow();
+    }, DRAWINGS_PERSIST_DELAY_MS);
+  });
+
+  if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('pagehide', flushDrawingsPersist);
+  }
+}

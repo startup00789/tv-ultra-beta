@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Bold,
   Bookmark,
+  Calculator,
   Check,
   ChevronDown,
   Crosshair,
@@ -22,6 +23,17 @@ import {
   type PitchforkVariant,
   type Timeframe,
 } from '../../../shared/types';
+import {
+  computePositionMetrics,
+  decimalsForTick,
+  formatPositionQty,
+  formatPositionRatio,
+  formatPositionSignedMoney,
+  inferTickSize,
+  positionSide,
+  resolvePositionConfig,
+  resolvePositionGeometry,
+} from '../../lib/drawingPosition';
 import { useWorkspaceStore } from '../../state/workspaceStore';
 
 const STANDARD_FIB_CANDIDATES = [
@@ -33,7 +45,7 @@ const DEFAULT_FIB_EXT = [0, 0.382, 0.618, 1, 1.272, 1.618, 2, 2.618];
 
 const ALL_TIMEFRAMES: readonly Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 
-type SettingsTab = 'style' | 'text' | 'coordinates' | 'visibility' | 'templates';
+type SettingsTab = 'style' | 'inputs' | 'text' | 'coordinates' | 'visibility' | 'templates';
 
 interface SwatchPickerButtonProps {
   testId: string;
@@ -213,6 +225,81 @@ function LineStyleSegment({
   );
 }
 
+function formatSettingNumber(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '';
+  return String(Number(value.toFixed(8)));
+}
+
+function NumberSetting({
+  label,
+  value,
+  onCommit,
+  min = 0,
+  step = 'any',
+  testId,
+  accent,
+  hint,
+}: {
+  label: string;
+  value: number | undefined;
+  onCommit: (value: number) => void;
+  min?: number;
+  step?: number | 'any';
+  testId?: string;
+  accent?: string;
+  hint?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const commit = () => {
+    const parsed = Number(draft);
+    if (draft.trim() !== '' && Number.isFinite(parsed) && parsed >= min) {
+      onCommit(parsed);
+    }
+    setFocused(false);
+  };
+
+  return (
+    <label className="flex flex-col gap-1">
+      <span
+        className="text-[10.5px] font-medium"
+        style={{ color: accent ?? 'var(--tv-text-muted)' }}
+      >
+        {label}
+      </span>
+      <input
+        type="number"
+        inputMode="decimal"
+        data-testid={testId}
+        min={min}
+        step={step}
+        value={focused ? draft : formatSettingNumber(value)}
+        onFocus={(e) => {
+          setDraft(formatSettingNumber(value));
+          setFocused(true);
+          e.currentTarget.select();
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+            e.currentTarget.blur();
+          } else if (e.key === 'Escape') {
+            setDraft(formatSettingNumber(value));
+            setFocused(false);
+            e.currentTarget.blur();
+          }
+        }}
+        className="h-[30px] px-2.5 rounded-[5px] bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] font-mono text-[11.5px] text-[var(--tv-text-primary)] focus:outline-none focus:border-[var(--tv-accent)]"
+      />
+      {hint && <span className="text-[9.5px] text-[var(--tv-text-muted)]">{hint}</span>}
+    </label>
+  );
+}
+
 export function DrawingSettingsModal() {
   const drawingSettingsId = useWorkspaceStore((s) => s.drawingSettingsId);
   const drawings = useWorkspaceStore((s) => s.drawings);
@@ -299,6 +386,24 @@ export function DrawingSettingsModal() {
     drawing.tool === 'fib' || drawing.tool === 'fib_ext' || drawing.tool === 'fib_fan';
   const isPositionTool =
     drawing.tool === 'long_position' || drawing.tool === 'short_position';
+  const positionTick = isPositionTool
+    ? drawing.tickSize ?? inferTickSize(drawing.symbol, drawing.points[0]?.price ?? 1)
+    : 0.01;
+  const positionGeometry = isPositionTool
+    ? resolvePositionGeometry(drawing, positionTick)
+    : null;
+  const positionConfig = isPositionTool
+    ? resolvePositionConfig({ ...drawing, tickSize: positionTick }, positionTick)
+    : null;
+  const positionMetrics =
+    positionGeometry && positionConfig
+      ? computePositionMetrics(
+          positionSide(drawing.tool),
+          positionGeometry,
+          positionConfig,
+        )
+      : null;
+  const positionSideValue = isPositionTool ? positionSide(drawing.tool) : 'long';
   const isBorderCapable =
     drawing.tool === 'rect' ||
     drawing.tool === 'channel' ||
@@ -323,8 +428,10 @@ export function DrawingSettingsModal() {
     drawing.tool === 'head_shoulders' ||
     drawing.tool === 'regression';
 
-  const curShowBorder =
-    drawing.showBorder !== false && (drawing.borderWidth ?? drawing.lineWidth ?? 2) > 0;
+  const curShowBorder = isPositionTool
+    ? Boolean(drawing.showBorder)
+    : drawing.showBorder !== false &&
+      (drawing.borderWidth ?? drawing.lineWidth ?? 2) > 0;
   const curBorderColor = drawing.borderColor ?? drawing.color;
   const curBorderWidth = drawing.borderWidth ?? drawing.lineWidth ?? 2;
   const curBorderStyle: DrawingLineStyle =
@@ -384,6 +491,19 @@ export function DrawingSettingsModal() {
     });
   };
 
+  const settingsTabs: ReadonlyArray<{
+    id: SettingsTab;
+    label: string;
+    Icon: typeof Palette;
+  }> = [
+    { id: 'style', label: 'Style', Icon: Palette },
+    { id: 'inputs', label: 'Inputs', Icon: Calculator },
+    { id: 'text', label: 'Text', Icon: Type },
+    { id: 'coordinates', label: 'Coordinates', Icon: Crosshair },
+    { id: 'visibility', label: 'Visibility', Icon: Eye },
+    { id: 'templates', label: 'Templates', Icon: Bookmark },
+  ];
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
@@ -425,15 +545,7 @@ export function DrawingSettingsModal() {
             aria-label="Drawing settings sections"
             className="w-[168px] shrink-0 border-r border-[var(--tv-border)] bg-[var(--tv-bg-panel)]/55 p-2 flex flex-col gap-0.5"
           >
-            {(
-              [
-                ['style', 'Style', Palette],
-                ['text', 'Text', Type],
-                ['coordinates', 'Coordinates', Crosshair],
-                ['visibility', 'Visibility', Eye],
-                ['templates', 'Templates', Bookmark],
-              ] as const
-            ).map(([id, label, Icon]) => {
+            {(settingsTabs).map(({ id, label, Icon }) => {
               const active = tab === id;
               return (
                 <button
@@ -527,6 +639,38 @@ export function DrawingSettingsModal() {
                     </div>
                   </div>
 
+                  {isPositionTool && (
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[12px] text-[var(--tv-text-primary)]">
+                        Position Colors
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <SwatchPickerButton
+                            testId="modal-target-color-btn"
+                            label="Target Color"
+                            color={drawing.targetColor ?? '#089981'}
+                            onChangeColor={(hex) =>
+                              updateDrawing(drawing.id, { targetColor: hex })
+                            }
+                          />
+                          <span className="text-[10.5px] text-[#089981]">Target</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <SwatchPickerButton
+                            testId="modal-stop-color-btn"
+                            label="Stop Color"
+                            color={drawing.stopColor ?? '#f23645'}
+                            onChangeColor={(hex) =>
+                              updateDrawing(drawing.id, { stopColor: hex })
+                            }
+                          />
+                          <span className="text-[10.5px] text-[#f23645]">Stop</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-2.5">
                     <label className="flex items-center justify-between gap-2">
                       <span className="text-[11.5px] text-[var(--tv-text-secondary)]">
@@ -562,52 +706,109 @@ export function DrawingSettingsModal() {
                     </label>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 pt-0.5 text-[11.5px]">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(drawing.extendLeft)}
-                        onChange={(e) =>
-                          updateDrawing(drawing.id, { extendLeft: e.target.checked })
-                        }
-                        className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
-                      />
-                      <span>Extend Left</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(drawing.extendRight)}
-                        onChange={(e) =>
-                          updateDrawing(drawing.id, { extendRight: e.target.checked })
-                        }
-                        className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
-                      />
-                      <span>Extend Right</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={drawing.showMidline !== false}
-                        onChange={(e) =>
-                          updateDrawing(drawing.id, { showMidline: e.target.checked })
-                        }
-                        className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
-                      />
-                      <span>Middle Line (50% CE)</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(drawing.showStats)}
-                        onChange={(e) =>
-                          updateDrawing(drawing.id, { showStats: e.target.checked })
-                        }
-                        className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
-                      />
-                      <span>Always Show Stats / Pips</span>
-                    </label>
-                  </div>
+                  {isPositionTool ? (
+                    <div className="grid grid-cols-2 gap-2 pt-0.5 text-[11.5px]">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="position-show-stats"
+                          checked={drawing.showStats !== false}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { showStats: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Stats</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="position-always-show-stats"
+                          checked={Boolean(drawing.alwaysShowStats)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, {
+                              alwaysShowStats: e.target.checked,
+                            })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Always Show Stats</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="position-compact-stats"
+                          checked={Boolean(drawing.compactStats)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { compactStats: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Compact Stats</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="position-price-labels"
+                          checked={drawing.showPriceLabels !== false}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, {
+                              showPriceLabels: e.target.checked,
+                            })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Price Labels</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 pt-0.5 text-[11.5px]">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(drawing.extendLeft)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { extendLeft: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Extend Left</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(drawing.extendRight)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { extendRight: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Extend Right</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={drawing.showMidline !== false}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { showMidline: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Middle Line (50% CE)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(drawing.showStats)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, { showStats: e.target.checked })
+                          }
+                          className="accent-[var(--tv-accent)] w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Always Show Stats / Pips</span>
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 {/* BORDER SECTION */}
@@ -850,59 +1051,270 @@ export function DrawingSettingsModal() {
                   </div>
                 )}
 
-                {/* Long / Short Position Risk & Bracket Inputs */}
                 {isPositionTool && (
-                  <div className="pt-3 border-t border-[var(--tv-border)] grid grid-cols-3 gap-2.5">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10.5px] text-[var(--tv-text-muted)]">
-                        Dollar Risk ($ USD)
-                      </span>
-                      <input
-                        type="number"
-                        min={10}
-                        step={50}
-                        value={drawing.riskAmountUsd ?? 1500}
-                        onChange={(e) =>
-                          updateDrawing(drawing.id, {
-                            riskAmountUsd: Math.max(10, Number(e.target.value) || 1500),
-                          })
-                        }
-                        className="h-[28px] px-2 rounded bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] font-mono"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10.5px] text-[#f23645]">Stop-Loss Price</span>
-                      <input
-                        type="number"
-                        step="any"
-                        value={drawing.stopPrice ?? ''}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (Number.isFinite(v) && v > 0) {
-                            updateDrawing(drawing.id, { stopPrice: v });
-                          }
-                        }}
-                        className="h-[28px] px-2 rounded bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] font-mono"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[10.5px] text-[#089981]">Take-Profit Price</span>
-                      <input
-                        type="number"
-                        step="any"
-                        value={drawing.targetPrice ?? ''}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (Number.isFinite(v) && v > 0) {
-                            updateDrawing(drawing.id, { targetPrice: v });
-                          }
-                        }}
-                        className="h-[28px] px-2 rounded bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] font-mono"
-                      />
-                    </label>
+                  <div className="pt-3 border-t border-[var(--tv-border)] text-[11px] text-[var(--tv-text-muted)]">
+                    Account size, risk, leverage, ticks and bracket prices are edited in the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setTab('inputs')}
+                      className="text-[var(--tv-accent)] font-semibold cursor-pointer"
+                    >
+                      Inputs
+                    </button>{' '}
+                    tab.
                   </div>
                 )}
               </>
+            )}
+
+            {tab === 'inputs' && (
+              <div className="flex flex-col gap-4">
+                {!isPositionTool || !positionGeometry || !positionConfig || !positionMetrics ? (
+                  <div className="rounded-[6px] border border-[var(--tv-border)] bg-[var(--tv-bg-panel)] p-4 text-[11.5px] text-[var(--tv-text-muted)]">
+                    This drawing has no numeric inputs. Geometry is edited directly on the
+                    chart.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[12.5px] font-semibold">Position Inputs</div>
+                        <div className="text-[10.5px] text-[var(--tv-text-muted)]">
+                          {positionSideValue === 'long' ? 'Long' : 'Short'} ·{' '}
+                          {drawing.symbol || 'Chart'} · tick {positionTick}
+                        </div>
+                      </div>
+                      <span
+                        className={`px-2 py-1 rounded text-[10.5px] font-semibold border ${
+                          positionMetrics.valid
+                            ? 'border-[#089981]/40 bg-[#089981]/12 text-[#089981]'
+                            : 'border-[#f23645]/40 bg-[#f23645]/12 text-[#f23645]'
+                        }`}
+                      >
+                        {positionMetrics.valid ? 'Valid bracket' : 'Check levels'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <NumberSetting
+                        label="Account size"
+                        value={positionConfig.accountSize}
+                        min={0.01}
+                        step="any"
+                        testId="position-account-size"
+                        onCommit={(v) => updateDrawing(drawing.id, { accountSize: v })}
+                      />
+                      <NumberSetting
+                        label="Lot size"
+                        value={positionConfig.lotSize}
+                        min={0.0000001}
+                        step="any"
+                        testId="position-lot-size"
+                        onCommit={(v) => updateDrawing(drawing.id, { lotSize: v })}
+                      />
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10.5px] font-medium text-[var(--tv-text-muted)]">
+                          Risk mode
+                        </span>
+                        <select
+                          data-testid="position-risk-mode"
+                          value={positionConfig.riskMode}
+                          onChange={(e) => {
+                            const mode = e.target.value === 'amount' ? 'amount' : 'percent';
+                            updateDrawing(drawing.id, {
+                              riskMode: mode,
+                              riskValue:
+                                mode === 'percent'
+                                  ? Math.min(100, Math.max(0.01, positionConfig.riskValue || 1))
+                                  : Math.max(1, positionConfig.riskValue || 100),
+                            });
+                          }}
+                          className="h-[30px] px-2 rounded-[5px] bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] text-[11.5px] text-[var(--tv-text-primary)] cursor-pointer"
+                        >
+                          <option value="percent">Percent of account</option>
+                          <option value="amount">Fixed amount</option>
+                        </select>
+                      </label>
+                      <NumberSetting
+                        label={
+                          positionConfig.riskMode === 'percent'
+                            ? 'Risk %'
+                            : 'Risk amount'
+                        }
+                        value={positionConfig.riskValue}
+                        min={0}
+                        step="any"
+                        testId="position-risk-value"
+                        onCommit={(v) =>
+                          updateDrawing(drawing.id, {
+                            riskValue:
+                              positionConfig.riskMode === 'percent'
+                                ? Math.min(100, v)
+                                : v,
+                          })
+                        }
+                      />
+                      <NumberSetting
+                        label="Entry price"
+                        value={positionGeometry.entry}
+                        min={0.0000001}
+                        step="any"
+                        testId="position-entry-price"
+                        onCommit={(v) =>
+                          updateDrawing(drawing.id, {
+                            points: [
+                              { time: positionGeometry.leftTime, price: v },
+                              { time: positionGeometry.rightTime, price: positionGeometry.target },
+                              { time: positionGeometry.rightTime, price: positionGeometry.stop },
+                            ],
+                            targetPrice: positionGeometry.target,
+                            stopPrice: positionGeometry.stop,
+                          })
+                        }
+                      />
+                      <NumberSetting
+                        label="Leverage"
+                        value={positionConfig.leverage}
+                        min={0.0001}
+                        step="any"
+                        testId="position-leverage"
+                        onCommit={(v) => updateDrawing(drawing.id, { leverage: v })}
+                      />
+                      <NumberSetting
+                        label="Point value"
+                        value={positionConfig.pointValue}
+                        min={0.0000001}
+                        step="any"
+                        testId="position-point-value"
+                        onCommit={(v) => updateDrawing(drawing.id, { pointValue: v })}
+                      />
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10.5px] font-medium text-[var(--tv-text-muted)]">
+                          QTY precision
+                        </span>
+                        <select
+                          data-testid="position-qty-precision"
+                          value={drawing.qtyPrecision === undefined ? 'default' : String(drawing.qtyPrecision)}
+                          onChange={(e) =>
+                            updateDrawing(drawing.id, {
+                              qtyPrecision:
+                                e.target.value === 'default'
+                                  ? undefined
+                                  : Number(e.target.value),
+                            })
+                          }
+                          className="h-[30px] px-2 rounded-[5px] bg-[var(--tv-bg-panel)] border border-[var(--tv-border)] text-[11.5px] text-[var(--tv-text-primary)] cursor-pointer"
+                        >
+                          <option value="default">Default</option>
+                          {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+                            <option key={p} value={p}>
+                              {p}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="pt-3 border-t border-[var(--tv-border)] flex flex-col gap-3">
+                      <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--tv-text-muted)]">
+                        Profit Level
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <NumberSetting
+                          label="Ticks"
+                          value={positionMetrics.targetTicks}
+                          min={1}
+                          step={1}
+                          testId="position-target-ticks"
+                          accent="#089981"
+                          onCommit={(v) =>
+                            updateDrawing(drawing.id, {
+                              targetPrice:
+                                positionSideValue === 'long'
+                                  ? positionGeometry.entry + v * positionTick
+                                  : positionGeometry.entry - v * positionTick,
+                            })
+                          }
+                        />
+                        <NumberSetting
+                          label="Price"
+                          value={positionGeometry.target}
+                          min={0.0000001}
+                          step="any"
+                          testId="position-target-price"
+                          accent="#089981"
+                          onCommit={(v) => updateDrawing(drawing.id, { targetPrice: v })}
+                        />
+                      </div>
+                      <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--tv-text-muted)]">
+                        Stop Level
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <NumberSetting
+                          label="Ticks"
+                          value={positionMetrics.stopTicks}
+                          min={1}
+                          step={1}
+                          testId="position-stop-ticks"
+                          accent="#f23645"
+                          onCommit={(v) =>
+                            updateDrawing(drawing.id, {
+                              stopPrice:
+                                positionSideValue === 'long'
+                                  ? positionGeometry.entry - v * positionTick
+                                  : positionGeometry.entry + v * positionTick,
+                            })
+                          }
+                        />
+                        <NumberSetting
+                          label="Price"
+                          value={positionGeometry.stop}
+                          min={0.0000001}
+                          step="any"
+                          testId="position-stop-price"
+                          accent="#f23645"
+                          onCommit={(v) => updateDrawing(drawing.id, { stopPrice: v })}
+                        />
+                      </div>
+                      <NumberSetting
+                        label="Tick size"
+                        value={positionTick}
+                        min={0.0000001}
+                        step="any"
+                        testId="position-tick-size"
+                        hint={`${decimalsForTick(positionTick)} decimals shown on this instrument`}
+                        onCommit={(v) => updateDrawing(drawing.id, { tickSize: v })}
+                      />
+                    </div>
+
+                    <div className="rounded-[6px] border border-[var(--tv-border)] bg-[var(--tv-bg-panel)] p-3 grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="text-[var(--tv-text-muted)]">Risk amount</div>
+                      <div className="text-right font-mono">
+                        {formatPositionSignedMoney(-positionMetrics.riskSize)}
+                      </div>
+                      <div className="text-[var(--tv-text-muted)]">Risk / Reward</div>
+                      <div className="text-right font-mono text-[var(--tv-accent)]">
+                        {formatPositionRatio(positionMetrics.riskReward)}
+                      </div>
+                      <div className="text-[var(--tv-text-muted)]">Quantity</div>
+                      <div className="text-right font-mono">
+                        {formatPositionQty(
+                          positionMetrics.qty,
+                          positionConfig.qtyPrecision,
+                        )}
+                      </div>
+                      <div className="text-[var(--tv-text-muted)]">Target P&amp;L</div>
+                      <div className="text-right font-mono text-[#089981]">
+                        {formatPositionSignedMoney(positionMetrics.targetPnl)}
+                      </div>
+                      <div className="text-[var(--tv-text-muted)]">Stop P&amp;L</div>
+                      <div className="text-right font-mono text-[#f23645]">
+                        {formatPositionSignedMoney(positionMetrics.stopPnl)}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             )}
 
             {tab === 'text' && (

@@ -48,6 +48,7 @@ import {
 } from '../../state/chartAppearanceStore';
 import { useWorkspaceStore } from '../../state/workspaceStore';
 import { DrawingOverlay } from '../drawings/DrawingOverlay';
+import { DrawingOverlayBoundary } from '../drawings/DrawingOverlayBoundary';
 import { BarReplayBar } from './BarReplayBar';
 
 const COMPARE_COLORS = ['#f59e0b', '#a855f7', '#06b6d4', '#ec4899'] as const;
@@ -2004,18 +2005,20 @@ export function ChartCanvas() {
           </div>
         )}
 
-      <DrawingOverlay
-        chart={chartRef.current}
-        mainSeries={mainSeriesRef.current}
-        bars={bars}
-        symbol={symbol}
-        timeframe={timeframe}
-        chartOverlay={chartOverlay}
-        overlayVisible={overlayVisible}
-        plotWidth={plotSize.width}
-        paneHeight={plotSize.height}
-        revision={overlayRevision}
-      />
+      <DrawingOverlayBoundary>
+        <DrawingOverlay
+          chart={chartRef.current}
+          mainSeries={mainSeriesRef.current}
+          bars={bars}
+          symbol={symbol}
+          timeframe={timeframe}
+          chartOverlay={chartOverlay}
+          overlayVisible={overlayVisible}
+          plotWidth={plotSize.width}
+          paneHeight={plotSize.height}
+          revision={overlayRevision}
+        />
+      </DrawingOverlayBoundary>
 
       <BarReplayBar />
 

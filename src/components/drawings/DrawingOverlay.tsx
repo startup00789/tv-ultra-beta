@@ -28,7 +28,24 @@ import {
   computeSmartMoneyConcepts,
   computeVolumeProfile,
 } from '../../lib/technicalOverlays';
+import {
+  DEFAULT_POSITION_LINE_COLOR,
+  DEFAULT_STOP_COLOR,
+  DEFAULT_TARGET_COLOR,
+  buildPositionDrawing,
+  buildPositionTags,
+  computePositionMetrics,
+  geometryToPoints,
+  inferTickSize,
+  isPositionTool,
+  normalizePositionGeometry,
+  positionSide,
+  resolvePositionConfig,
+  resolvePositionGeometry,
+  simulatePositionOutcome,
+} from '../../lib/drawingPosition';
 import { useWorkspaceStore } from '../../state/workspaceStore';
+import { PositionShape } from './PositionShape';
 
 const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   '1m': 60,
@@ -299,7 +316,7 @@ interface DraftState {
 
 interface DragMoveState {
   drawingId: string;
-  handleIndex: number | 'all' | 'stop' | 'target' | BoxHandleId;
+  handleIndex: number | 'all' | 'entry' | 'stop' | 'target' | 'duration' | BoxHandleId;
   originAnchor: DrawingPoint;
   initialPoints: DrawingPoint[];
   undoRecorded: boolean;
@@ -528,22 +545,37 @@ export function DrawingOverlay({
     [bars, chart, mainSeries, paneHeight, plotWidth, stepSec],
   );
 
+  const timeToX = useCallback(
+    (time: number): number | null => {
+      if (!chart || bars.length === 0) return null;
+      const xCoord = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
+      if (xCoord !== null && Number.isFinite(xCoord)) return Number(xCoord);
+
+      const logicalIndex = timeToLogicalIndex(bars, time, stepSec);
+      const fallback = chart.timeScale().logicalToCoordinate(logicalIndex as Logical);
+      return fallback !== null && Number.isFinite(fallback) ? Number(fallback) : null;
+    },
+    [bars, chart, stepSec],
+  );
+
+  const priceToY = useCallback(
+    (price: number): number | null => {
+      if (!mainSeries) return null;
+      const yCoord = mainSeries.priceToCoordinate(price);
+      return yCoord !== null && Number.isFinite(yCoord) ? Number(yCoord) : null;
+    },
+    [mainSeries],
+  );
+
   const anchorToPixel = useCallback(
     (pt: DrawingPoint): { x: number; y: number } | null => {
-      if (!chart || !mainSeries || bars.length === 0) return null;
-      const yCoord = mainSeries.priceToCoordinate(pt.price);
-      if (yCoord === null || !Number.isFinite(yCoord)) return null;
-
-      let xCoord = chart.timeScale().timeToCoordinate(pt.time as UTCTimestamp);
-      if (xCoord === null || !Number.isFinite(xCoord)) {
-        const logical = timeToLogicalIndex(bars, pt.time, stepSec);
-        xCoord = chart.timeScale().logicalToCoordinate(logical as Logical);
-      }
-      if (xCoord === null || !Number.isFinite(xCoord)) return null;
-
-      return { x: Number(xCoord), y: Number(yCoord) };
+      const yCoord = priceToY(pt.price);
+      if (yCoord === null) return null;
+      const xCoord = timeToX(pt.time);
+      if (xCoord === null) return null;
+      return { x: xCoord, y: yCoord };
     },
-    [bars, chart, mainSeries, stepSec],
+    [priceToY, timeToX],
   );
 
   const getLocalCoords = (clientX: number, clientY: number): { x: number; y: number } => {
@@ -586,20 +618,21 @@ export function DrawingOverlay({
       const color = getDefaultColorForTool(tool);
 
       const isBrushLike = tool === 'brush' || tool === 'highlighter';
+      const positionDefaults = isPositionTool(tool) ? defaultToolStyles[tool] ?? {} : {};
+      const positionBuilt = isPositionTool(tool)
+        ? buildPositionDrawing(
+            tool as 'long_position' | 'short_position',
+            p1,
+            p2,
+            positionDefaults.tickSize ?? inferTickSize(symbol, p1.price),
+          )
+        : null;
       const points =
-        isBrushLike && brushPts && brushPts.length >= 2 ? brushPts : pts;
-
-      let stopPrice: number | undefined;
-      let targetPrice: number | undefined;
-      if (tool === 'long_position') {
-        const delta = Math.abs(p2.price - p1.price) || p1.price * 0.02;
-        targetPrice = p2.price >= p1.price ? p2.price : p1.price + delta;
-        stopPrice = p1.price - delta * 0.5;
-      } else if (tool === 'short_position') {
-        const delta = Math.abs(p2.price - p1.price) || p1.price * 0.02;
-        targetPrice = p2.price <= p1.price ? p2.price : p1.price - delta;
-        stopPrice = p1.price + delta * 0.5;
-      }
+        isBrushLike && brushPts && brushPts.length >= 2
+          ? brushPts
+          : positionBuilt
+            ? positionBuilt.points
+            : pts;
 
       addDrawing({
         id,
@@ -607,11 +640,38 @@ export function DrawingOverlay({
         symbol,
         timeframe,
         points,
-        color,
+        color: positionBuilt
+          ? positionDefaults.color ?? DEFAULT_POSITION_LINE_COLOR
+          : color,
         lineWidth: tool === 'highlighter' ? 12 : 2,
         text: tool === 'callout' ? 'Callout' : undefined,
-        stopPrice,
-        targetPrice,
+        stopPrice: positionBuilt?.stopPrice,
+        targetPrice: positionBuilt?.targetPrice,
+        tickSize: positionBuilt?.tickSize,
+        targetColor: positionBuilt
+          ? positionDefaults.targetColor ?? DEFAULT_TARGET_COLOR
+          : undefined,
+        stopColor: positionBuilt
+          ? positionDefaults.stopColor ?? DEFAULT_STOP_COLOR
+          : undefined,
+        showFill: positionBuilt ? positionDefaults.showFill ?? true : undefined,
+        fillOpacity: positionBuilt ? positionDefaults.fillOpacity ?? 0.18 : undefined,
+        showBorder: positionBuilt ? positionDefaults.showBorder ?? false : undefined,
+        showPriceLabels: positionBuilt
+          ? positionDefaults.showPriceLabels ?? true
+          : undefined,
+        showStats: positionBuilt ? positionDefaults.showStats ?? true : undefined,
+        alwaysShowStats: positionBuilt
+          ? positionDefaults.alwaysShowStats ?? false
+          : undefined,
+        compactStats: positionBuilt ? positionDefaults.compactStats ?? false : undefined,
+        accountSize: positionBuilt ? positionDefaults.accountSize : undefined,
+        lotSize: positionBuilt ? positionDefaults.lotSize : undefined,
+        riskMode: positionBuilt ? positionDefaults.riskMode : undefined,
+        riskValue: positionBuilt ? positionDefaults.riskValue : undefined,
+        leverage: positionBuilt ? positionDefaults.leverage : undefined,
+        pointValue: positionBuilt ? positionDefaults.pointValue : undefined,
+        qtyPrecision: positionBuilt ? positionDefaults.qtyPrecision : undefined,
         showMidline: tool === 'rect' || tool === 'channel' ? true : undefined,
         extendRight: false,
         visible: true,
@@ -623,7 +683,7 @@ export function DrawingOverlay({
         setEditingTextVal('Callout');
       }
     },
-    [addDrawing, bars, setAIRangeSelection, setActiveRightTab, setActiveTool, symbol, timeframe],
+    [addDrawing, bars, defaultToolStyles, setAIRangeSelection, setActiveRightTab, setActiveTool, symbol, timeframe],
   );
 
   // Enter commits an in-progress multi-point tool early if >= 2 points are placed
@@ -771,12 +831,55 @@ export function DrawingOverlay({
         setDragMove((prev) => (prev ? { ...prev, undoRecorded: true } : null));
       }
 
-      if (dragMove.handleIndex === 'stop') {
-        updateDrawing(dragMove.drawingId, { stopPrice: nextAnchor.price }, { skipUndo });
-        return;
-      }
-      if (dragMove.handleIndex === 'target') {
-        updateDrawing(dragMove.drawingId, { targetPrice: nextAnchor.price }, { skipUndo });
+      if (
+        dragMove.handleIndex === 'stop' ||
+        dragMove.handleIndex === 'target' ||
+        dragMove.handleIndex === 'entry' ||
+        dragMove.handleIndex === 'duration'
+      ) {
+        const moving = drawings.find((d) => d.id === dragMove.drawingId);
+        if (!moving || !isPositionTool(moving.tool)) return;
+        const initial = dragMove.initialPoints;
+        if (initial.length < 3) return;
+        const dt = nextAnchor.time - dragMove.originAnchor.time;
+        const dp = nextAnchor.price - dragMove.originAnchor.price;
+        const next = initial.map((p) => ({ ...p }));
+
+        if (dragMove.handleIndex === 'duration') {
+          const rightTime = initial[1].time + dt;
+          next[1].time = rightTime;
+          next[2].time = rightTime;
+        } else if (dragMove.handleIndex === 'target') {
+          next[1].price = initial[1].price + dp;
+        } else if (dragMove.handleIndex === 'stop') {
+          next[2].price = initial[2].price + dp;
+        } else {
+          next[0].price = initial[0].price + dp;
+        }
+
+        const tickSize =
+          moving.tickSize ?? inferTickSize(moving.symbol, initial[0].price);
+        const geometry = normalizePositionGeometry(
+          positionSide(moving.tool),
+          {
+            leftTime: next[0].time,
+            rightTime: Math.max(next[1].time, next[2].time),
+            entry: next[0].price,
+            target: next[1].price,
+            stop: next[2].price,
+          },
+          tickSize,
+        );
+        updateDrawing(
+          dragMove.drawingId,
+          {
+            points: geometryToPoints(geometry),
+            targetPrice: geometry.target,
+            stopPrice: geometry.stop,
+            tickSize,
+          },
+          { skipUndo },
+        );
         return;
       }
 
@@ -1071,6 +1174,10 @@ export function DrawingOverlay({
 
     const renderAnchorHandles = () => {
       if (isDraft) return null;
+
+      // Positions own their 4-handle affordance (entry / target / stop /
+      // duration). Generic anchor dots would collide with those handles.
+      if (isPositionTool(tool)) return null;
 
       if (isBoxResizeTool) {
         const xLeft = Math.min(px[0].x, px[1].x);
@@ -2628,125 +2735,91 @@ export function DrawingOverlay({
       );
     }
 
-    if (tool === 'long_position' || tool === 'short_position') {
-      const isLong = tool === 'long_position';
-      const entryPrice = points[0].price;
-      const defaultDelta = Math.abs(points[1].price - entryPrice) || entryPrice * 0.02;
-      const targetPrice =
-        meta?.targetPrice ??
-        (isLong ? Math.max(points[1].price, entryPrice + defaultDelta * 0.5) : Math.min(points[1].price, entryPrice - defaultDelta * 0.5));
-      const stopPrice =
-        meta?.stopPrice ?? (isLong ? entryPrice - defaultDelta * 0.5 : entryPrice + defaultDelta * 0.5);
-      const targetCoord = anchorToPixel({ time: points[1].time, price: targetPrice });
-      const stopCoord = anchorToPixel({ time: points[1].time, price: stopPrice });
-      const rx = Math.min(p1.x, p2.x);
-      const rw = Math.max(120, Math.abs(p2.x - p1.x));
-      if (!targetCoord || !stopCoord) return null;
-      const risk = Math.max(1e-6, Math.abs(entryPrice - stopPrice));
-      const reward = Math.abs(targetPrice - entryPrice);
-      const rr = reward / risk;
-      const riskUsd = meta?.riskAmountUsd ?? 1500;
-      const sizedQty = riskUsd / risk;
-      const profitTop = Math.min(p1.y, targetCoord.y);
-      const profitH = Math.max(2, Math.abs(targetCoord.y - p1.y));
-      const stopTop = Math.min(p1.y, stopCoord.y);
-      const stopH = Math.max(2, Math.abs(stopCoord.y - p1.y));
-      const zoneAlpha = meta?.showFill === false ? 0.04 : (meta?.fillOpacity ?? 0.22);
+    if (isPositionTool(tool)) {
+      const side = positionSide(tool);
+      const tickSize =
+        meta?.tickSize ?? inferTickSize(symbol, points[0]?.price ?? 1);
+      const geometry = resolvePositionGeometry(
+        {
+          tool,
+          points,
+          targetPrice: meta?.targetPrice,
+          stopPrice: meta?.stopPrice,
+        },
+        tickSize,
+      );
+      const config = resolvePositionConfig({ ...meta, tickSize }, tickSize);
+      const metrics = computePositionMetrics(side, geometry, config);
+      const outcome = simulatePositionOutcome(side, geometry, metrics, bars, config);
+      const tags = buildPositionTags(metrics, outcome, {
+        tickSize,
+        qtyPrecision: config.qtyPrecision,
+        compact: Boolean(meta?.compactStats),
+      });
+
+      const leftX = timeToX(geometry.leftTime);
+      const rightX = timeToX(geometry.rightTime);
+      const entryY = priceToY(geometry.entry);
+      const targetY = priceToY(geometry.target);
+      const stopY = priceToY(geometry.stop);
+      if (leftX === null || rightX === null || entryY === null) return null;
+
+      const box = {
+        leftX,
+        rightX: Math.max(rightX, leftX + 2),
+        entryY,
+        targetY: targetY ?? entryY,
+        stopY: stopY ?? entryY,
+      };
+      const targetColor = meta?.targetColor ?? DEFAULT_TARGET_COLOR;
+      const stopColor = meta?.stopColor ?? DEFAULT_STOP_COLOR;
+      const statsVisible =
+        Boolean(meta?.showStats ?? true) &&
+        (isSelected || isHovered || Boolean(meta?.alwaysShowStats));
+
       return wrapGroup(
-        <>
-          <rect
-            x={rx}
-            y={profitTop}
-            width={rw}
-            height={profitH}
-            fill={hexToRgba('#089981', zoneAlpha, '#089981')}
-            stroke={hasBorder ? (meta?.borderColor ?? '#089981') : 'none'}
-            strokeWidth={hasBorder ? Math.max(1, baseBorderW * 0.75) : 0}
-            strokeDasharray={borderDash}
-          />
-          <rect
-            x={rx}
-            y={stopTop}
-            width={rw}
-            height={stopH}
-            fill={hexToRgba('#f23645', zoneAlpha, '#f23645')}
-            stroke={hasBorder ? (meta?.borderColor ?? '#f23645') : 'none'}
-            strokeWidth={hasBorder ? Math.max(1, baseBorderW * 0.75) : 0}
-            strokeDasharray={borderDash}
-          />
-          <line x1={rx} y1={p1.y} x2={rx + rw} y2={p1.y} stroke="transparent" strokeWidth={16} />
-          <line
-            x1={rx}
-            y1={p1.y}
-            x2={rx + rw}
-            y2={p1.y}
-            stroke="#d1d4dc"
-            strokeWidth={strokeW}
-            strokeDasharray={dash}
-          />
-          <rect x={rx + 4} y={p1.y - 11} width={Math.max(162, rw - 8)} height={20} rx={3} fill="rgba(19, 23, 34, 0.92)" />
-          <text x={rx + 8} y={p1.y + 3} fill="#d1d4dc" fontSize={9.5} fontWeight={600}>
-            {`${isLong ? 'LONG' : 'SHORT'} · R:R 1:${rr.toFixed(2)} · Qty ${sizedQty.toFixed(2)}`}
-          </text>
-          <text x={rx + 6} y={targetCoord.y + (targetCoord.y < p1.y ? 11 : -4)} fill="#089981" fontSize={9.5} fontWeight={600}>
-            {`TP ${formatPriceSmart(targetPrice, symbol)} (+$${(sizedQty * reward).toFixed(0)})`}
-          </text>
-          <text x={rx + 6} y={stopCoord.y + (stopCoord.y > p1.y ? -4 : 11)} fill="#f23645" fontSize={9.5} fontWeight={600}>
-            {`SL ${formatPriceSmart(stopPrice, symbol)} (-$${riskUsd.toFixed(0)})`}
-          </text>
-          {isSelected && !lockDrawings && !locked && (
-            <>
-              <circle
-                data-testid="drawing-target-handle"
-                cx={rx + rw}
-                cy={targetCoord.y}
-                r={5.5}
-                fill="#089981"
-                stroke="#ffffff"
-                strokeWidth={2}
-                style={{ cursor: 'ns-resize' }}
-                onPointerDown={(ev) => {
-                  ev.stopPropagation();
-                  const { x, y } = getLocalCoords(ev.clientX, ev.clientY);
-                  const originAnchor = pixelToAnchor(x, y, false);
-                  if (originAnchor) {
-                    setDragMove({
-                      drawingId: id,
-                      handleIndex: 'target',
-                      originAnchor,
-                      initialPoints: points.map((p) => ({ ...p })),
-                      undoRecorded: false,
-                    });
-                  }
-                }}
-              />
-              <circle
-                data-testid="drawing-stop-handle"
-                cx={rx + rw}
-                cy={stopCoord.y}
-                r={5.5}
-                fill="#f23645"
-                stroke="#ffffff"
-                strokeWidth={2}
-                style={{ cursor: 'ns-resize' }}
-                onPointerDown={(ev) => {
-                  ev.stopPropagation();
-                  const { x, y } = getLocalCoords(ev.clientX, ev.clientY);
-                  const originAnchor = pixelToAnchor(x, y, false);
-                  if (originAnchor) {
-                    setDragMove({
-                      drawingId: id,
-                      handleIndex: 'stop',
-                      originAnchor,
-                      initialPoints: points.map((p) => ({ ...p })),
-                      undoRecorded: false,
-                    });
-                  }
-                }}
-              />
-            </>
-          )}
-        </>,
+        <PositionShape
+          side={side}
+          metrics={metrics}
+          outcome={outcome}
+          tags={tags}
+          box={box}
+          plotWidth={plotWidth}
+          paneHeight={paneHeight}
+          lineColor={color}
+          lineWidth={strokeW}
+          lineDash={dash}
+          lineOpacity={lineAlpha}
+          targetColor={targetColor}
+          stopColor={stopColor}
+          showFill={meta?.showFill !== false}
+          fillOpacity={meta?.fillOpacity ?? 0.18}
+          showBorder={Boolean(meta?.showBorder)}
+          borderColor={meta?.borderColor ?? color}
+          borderWidth={meta?.borderWidth ?? baseBorderW}
+          borderDash={borderDash}
+          borderOpacity={meta?.borderOpacity ?? lineAlpha}
+          fontSize={fontSz}
+          showPriceLabels={meta?.showPriceLabels ?? true}
+          statsVisible={statsVisible}
+          selected={isSelected}
+          interactive={activeTool === 'crosshair' && !lockDrawings}
+          locked={locked}
+          priceFormatter={(value) => formatPriceSmart(value, symbol)}
+          onHandleDown={(handle, ev) => {
+            const { x, y } = getLocalCoords(ev.clientX, ev.clientY);
+            const originAnchor = pixelToAnchor(x, y, false);
+            if (!originAnchor) return;
+            selectDrawing(id);
+            setDragMove({
+              drawingId: id,
+              handleIndex: handle,
+              originAnchor,
+              initialPoints: geometryToPoints(geometry),
+              undoRecorded: false,
+            });
+          }}
+        />,
       );
     }
 

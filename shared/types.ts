@@ -254,6 +254,20 @@ export interface DrawingStyleTemplate {
   pitchforkStyle?: PitchforkVariant;
   riskAmountUsd?: number;
   visibleTimeframes?: Timeframe[];
+
+  // Long / Short Position inputs & style
+  accountSize?: number;
+  lotSize?: number;
+  riskMode?: 'amount' | 'percent';
+  riskValue?: number;
+  leverage?: number;
+  pointValue?: number;
+  qtyPrecision?: number;
+  stopColor?: string;
+  targetColor?: string;
+  compactStats?: boolean;
+  alwaysShowStats?: boolean;
+  tickSize?: number;
 }
 
 export interface DrawingObject {
@@ -281,6 +295,21 @@ export interface DrawingObject {
   stopPrice?: number;
   targetPrice?: number;
   riskAmountUsd?: number;
+
+  // Long / Short Position inputs & style
+  accountSize?: number;
+  lotSize?: number;
+  riskMode?: 'amount' | 'percent';
+  riskValue?: number;
+  leverage?: number;
+  pointValue?: number;
+  qtyPrecision?: number;
+  stopColor?: string;
+  targetColor?: string;
+  compactStats?: boolean;
+  alwaysShowStats?: boolean;
+  tickSize?: number;
+
   fillColor?: string;
   fillOpacity?: number;
   showFill?: boolean;
